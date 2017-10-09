@@ -1,0 +1,106 @@
+---
+title: 'Machine Learning: An Analysis of the Weight Lifting Exercises Dataset'
+author: "Kristopher Lohmuller"
+date: "October 8, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+#Synopsis
+##Background
+Using devices such as Fitbit, it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+##Objective
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+##More Information / Citation
+More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+#Data Processing and Analysis
+To begin our analysis, we first load all relevant libraries and any files required.
+```{r dataLoad}
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(randomForest)
+library(dplyr)
+fileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileURL1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+destFile <- "pml-training.csv"
+destFile1 <- "pml-testing.csv"
+download.file(fileURL,destfile=destFile)
+download.file(fileURL1,destfile=destFile1)
+```
+We then build our training and testing datasets from the associated files.
+```{r fileSetup}
+training <- read.csv(destFile,na.strings=c("NA", ""))
+testing <- read.csv(destFile1,na.strings=c("NA", ""))
+```
+
+##Data Cleaning
+Upon initial analysis of the data, there are several observations that have missing values, and other observations that appear to have no bearing on the classe variable. We remove these columns to clean the dataset. We also set classe as the focal point of our analysis by making it a factor variable.
+```{r cleaning}
+trainDF <- select(training, -contains("timestamp"),-ends_with("window"),-starts_with("user"),-X)
+testDF <- select(testing, -contains("timestamp"),-ends_with("window"),-starts_with("user"),-X)
+trainDF <- trainDF[,(colSums(is.na(trainDF))==0)]
+testDF <- testDF[,(colSums(is.na(testDF))==0)]
+trainDF$classe <- as.factor(trainDF$classe)
+```
+
+##Data Splitting
+Due to the low number of observations, splitting the training set in two will allow us to validate our models on a dataset prior to applying them to our test set. This also allows us to compare the performance of various models in order to choose which model is best to use on our test set.
+```{r splitting}
+set.seed(3456)
+inTrain <- createDataPartition(trainDF$classe,p=0.7,list=FALSE)
+trainSplit <- trainDF[inTrain,]
+trainValid <- trainDF[-inTrain,]
+```
+
+##Data Reduction
+After cleaning the datasets, we still are left with 52 variables to analyze. Using a correlation plot and hierarchical cluster analysis, we find there are several groupings of highly correlated varibles. This suggests we can use principal component analysis to reduce the date even further.
+```{r reduction}
+predCorr <- round(cor(trainSplit[sapply(trainDF,is.numeric)]),2)
+par(ps=5)
+corrplot(predCorr, order = "hclust", tl.col="black", type="lower", tl.pos = "lt", tl.cex = 1.5)
+```
+
+##Modeling/Validation
+We can now train a model of our data using a random forest method, which improves performance by reducing variance. We then show a visualization of the importance of each principal component.
+```{r modeling}
+modFit <- train(classe ~ ., method="rf", data=trainSplit, preProc="pca", trControl = trainControl(method="cv",number=4,preProcOptions = list(thresh=0.8)),ntree=100,importance=TRUE)
+par(ps=7)
+varImpPlot(modFit$finalModel, sort = TRUE, type = 1, pch = 19, col = 1, cex = 1,main = "Relative Importance of Principal Components")
+```
+
+We can now fit this model to our validation data set and analyze the results.
+```{r validation}
+modFitVal <- predict(modFit,trainValid)
+confusionMatrix(trainValid$classe,modFitVal)$table
+modFitAcc <- round(postResample(trainValid$classe,modFitVal)[[1]],3)
+```
+
+As can be seen, while there are many misclassifications, we have an accuracy rate of `r modFitAcc`.
+
+We can also analyze how much prediction was lost using PCAs by performing a random forest analysis on the full data set and analyzing the importance of the predictors.
+```{r comparison}
+modFit2 <- train(classe ~ ., method="rf", data=trainSplit, trControl = trainControl(method="cv",number=4),ntree=100,importance=TRUE)
+par(ps=7)
+varImpPlot(modFit2$finalModel, sort = TRUE, type = 1, pch = 19, col = 1, cex = 1, main = "Relative Importance of Top 30 Predictor Variables")
+modFitVal2 <- predict(modFit2,trainValid)
+confusionMatrix(trainValid$classe,modFitVal2)$table
+modFitAcc2 <- round(postResample(trainValid$classe,modFitVal2)[[1]],3)
+```
+
+As can be seen, the amount of miscalculations has decreased significantly, and the accuracy rate has increased to `r modFitAcc2`. This shows that using principal component analysis actually decreased our accuracy by about 3%.
+
+## Test Data and Predictions
+Based on our models, we will apply the second model to our test dataset to predict the results.
+```{r testing}
+modFitTest <- predict(modFit2, testDF)
+modFitTest
+```
